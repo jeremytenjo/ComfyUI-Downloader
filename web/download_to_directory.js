@@ -27,6 +27,7 @@
   };
 
   let restartConfirmResolver = null;
+  let uploadPathResolver = null;
   let hotReloadTimer = null;
   let lastHotReloadStamp = null;
 
@@ -524,6 +525,35 @@
         border-radius: 9px;
         font-size: 13px;
         font-weight: 600;
+      }
+      #${DIALOG_ID} .upload-path-copy {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--p-text-muted-color, #a8afbd);
+      }
+      #${DIALOG_ID} .upload-path-actions {
+        margin-top: 12px;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #${DIALOG_ID} .upload-path-actions button {
+        width: auto;
+        min-width: 96px;
+        height: 36px;
+        padding: 8px 12px;
+        border-radius: 9px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      #${DIALOG_ID} #dtd-upload-path-confirm {
+        background: var(--p-primary-color, #2587f9);
+        border-color: color-mix(in srgb, var(--p-primary-color, #2587f9) 68%, #ffffff 32%);
+        color: #ffffff;
+      }
+      #${DIALOG_ID} #dtd-upload-path-confirm:hover {
+        filter: brightness(1.08);
       }
       #${DIALOG_ID} .missing-modal {
         position: fixed;
@@ -2434,13 +2464,28 @@
     }
 
     const singleFileMode = selectedFiles.length === 1;
+    const totalFiles = selectedFiles.length;
     let successCount = 0;
     let failCount = 0;
     let lastSuccessPath = '';
     let lastSuccessBytes = 0;
 
-    for (let index = 0; index < selectedFiles.length; index += 1) {
+    for (let index = 0; index < totalFiles; index += 1) {
       const selectedFile = selectedFiles[index];
+      const entryId = `upload-${Date.now()}-${index}`;
+      addHistoryEntry({
+        ...attempt,
+        id: entryId,
+        created_at: Date.now(),
+        operation: 'upload',
+        status: 'running',
+        file_name: selectedFile.name,
+        destination_path: '',
+        bytes_written: 0,
+        total_bytes: Number(selectedFile.size || 0),
+        progress_percent: 0,
+        error: '',
+      });
       const payload = new FormData();
       payload.append('file', selectedFile);
       payload.append('root_key', attempt.root_key || '');
@@ -2449,8 +2494,9 @@
       payload.append('filename', singleFileMode ? attempt.filename || '' : '');
       payload.append('overwrite', attempt.overwrite ? 'true' : 'false');
 
+      const remainingAfterCurrent = totalFiles - (index + 1);
       setStatus(
-        `Uploading ${index + 1}/${selectedFiles.length}: ${selectedFile.name}...`,
+        `Uploading ${index + 1}/${totalFiles}: ${selectedFile.name} (${remainingAfterCurrent} remaining after this)`,
       );
 
       const resp = await apiFetch('/download-to-dir/upload', {
@@ -2465,24 +2511,23 @@
           data,
           `Upload failed (${resp.status})`,
         );
-        addHistoryEntry({
-          ...attempt,
-          operation: 'upload',
+        updateHistoryEntry(entryId, {
           status: 'failed',
-          file_name: selectedFile.name,
           error: message,
         });
         failCount += 1;
+        const processed = successCount + failCount;
+        const remaining = totalFiles - processed;
+        if (remaining > 0) {
+          setStatus(`Uploaded ${processed}/${totalFiles}. ${remaining} remaining...`);
+        }
         continue;
       }
 
       const writtenBytes = Number(data.bytes_written || selectedFile.size || 0);
       const destinationPath = String(data.destination_path || '').trim();
-      addHistoryEntry({
-        ...attempt,
-        operation: 'upload',
+      updateHistoryEntry(entryId, {
         status: 'success',
-        file_name: selectedFile.name,
         destination_path: destinationPath,
         path: destinationPath,
         bytes_written: writtenBytes,
@@ -2493,6 +2538,11 @@
       successCount += 1;
       lastSuccessPath = destinationPath;
       lastSuccessBytes = writtenBytes;
+      const processed = successCount + failCount;
+      const remaining = totalFiles - processed;
+      if (remaining > 0) {
+        setStatus(`Uploaded ${processed}/${totalFiles}. ${remaining} remaining...`);
+      }
     }
 
     const recentFolder =
@@ -2572,6 +2622,41 @@
       restartConfirmResolver(Boolean(confirmed));
       restartConfirmResolver = null;
     }
+  }
+
+  function closeUploadPathModal(pathValue) {
+    const modal = document.getElementById('dtd-upload-path-modal');
+    if (modal) modal.hidden = true;
+    if (!uploadPathResolver) return;
+    const resolver = uploadPathResolver;
+    uploadPathResolver = null;
+    resolver(pathValue);
+  }
+
+  function requestUploadPath() {
+    const modal = document.getElementById('dtd-upload-path-modal');
+    const input = document.getElementById('dtd-upload-path-input');
+    if (!modal || !(input instanceof HTMLInputElement)) {
+      return Promise.resolve(null);
+    }
+    if (uploadPathResolver) closeUploadPathModal(null);
+
+    const folderInput = document.getElementById('dtd-folder');
+    const selectedRoot = document.getElementById('dtd-root');
+    const selectedRootValue = String(selectedRoot?.value || '').trim();
+    const selectedRecent = selectedRootValue.startsWith('recent:')
+      ? selectedRootValue.slice('recent:'.length)
+      : '';
+    input.value = String(folderInput?.value || selectedRecent || 'output').trim();
+    modal.hidden = false;
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+
+    return new Promise((resolve) => {
+      uploadPathResolver = resolve;
+    });
   }
 
   function requestActionConfirmation({
@@ -2896,6 +2981,17 @@
             </div>
           </div>
         </div>
+        <div id="dtd-upload-path-modal" class="confirm-modal" hidden>
+          <div class="confirm-card">
+            <h3 class="confirm-title">Upload Output Path</h3>
+            <p class="upload-path-copy">Choose where uploaded images should be saved (relative to ComfyUI root).</p>
+            <input id="dtd-upload-path-input" type="text" placeholder="output or output/my-images" />
+            <div class="upload-path-actions">
+              <button id="dtd-upload-path-cancel" type="button">Cancel</button>
+              <button id="dtd-upload-path-confirm" type="button">Choose Files</button>
+            </div>
+          </div>
+        </div>
         <div id="dtd-missing-modal" class="missing-modal" hidden>
           <div class="missing-card">
             <h3 class="missing-title">Missing Custom Nodes</h3>
@@ -3035,7 +3131,23 @@
     const upload = document.getElementById('dtd-upload');
     const fileInput = document.getElementById('dtd-file');
     if (upload && fileInput instanceof HTMLInputElement) {
-      upload.addEventListener('click', () => fileInput.click());
+      upload.addEventListener('click', async () => {
+        const chosenPath = await requestUploadPath();
+        if (chosenPath == null) return;
+        const normalizedPath = String(chosenPath || '').trim();
+        const folderInput = document.getElementById('dtd-folder');
+        if (folderInput instanceof HTMLInputElement) {
+          folderInput.value = normalizedPath;
+        }
+        const rootInput = document.getElementById('dtd-root');
+        if (rootInput instanceof HTMLSelectElement) {
+          const hasOutputRoot = Array.from(rootInput.options).some(
+            (opt) => opt.value === 'output',
+          );
+          if (hasOutputRoot) rootInput.value = 'output';
+        }
+        fileInput.click();
+      });
       fileInput.addEventListener('change', () => {
         const files = Array.from(fileInput.files || []);
         fileInput.value = '';
@@ -3074,6 +3186,36 @@
     }
     if (confirmConfirm) {
       confirmConfirm.addEventListener('click', () => closeConfirmModal(true));
+    }
+
+    const uploadPathModal = document.getElementById('dtd-upload-path-modal');
+    const uploadPathInput = document.getElementById('dtd-upload-path-input');
+    const uploadPathCancel = document.getElementById('dtd-upload-path-cancel');
+    const uploadPathConfirm = document.getElementById('dtd-upload-path-confirm');
+    if (uploadPathModal) {
+      uploadPathModal.addEventListener('click', (event) => {
+        if (event.target === uploadPathModal) closeUploadPathModal(null);
+      });
+      uploadPathModal.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeUploadPathModal(null);
+          return;
+        }
+        if (event.key === 'Enter') {
+          const currentValue = String(uploadPathInput?.value || '').trim();
+          closeUploadPathModal(currentValue);
+        }
+      });
+    }
+    if (uploadPathCancel) {
+      uploadPathCancel.addEventListener('click', () => closeUploadPathModal(null));
+    }
+    if (uploadPathConfirm) {
+      uploadPathConfirm.addEventListener('click', () => {
+        const currentValue = String(uploadPathInput?.value || '').trim();
+        closeUploadPathModal(currentValue);
+      });
     }
 
     const missingModal = document.getElementById('dtd-missing-modal');
