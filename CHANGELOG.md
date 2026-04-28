@@ -2,6 +2,11 @@
 
 All notable changes to this extension are documented in this file.
 
+## 2026-04-28
+
+- Added an upload-path modal that opens when clicking `Upload`, so users can input the output folder before choosing files.
+- Improved multi-file upload progress feedback with clearer loading states, including processed count and how many uploads remain.
+
 ## 2026-04-24
 
 - Renamed the project branding to `ComfyUI-Downloader` across docs and UI labels.
