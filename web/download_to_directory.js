@@ -24,6 +24,7 @@
     installProgress: null,
     installPollTimer: null,
     installResults: [],
+    uploadFolder: 'output',
   };
 
   let restartConfirmResolver = null;
@@ -2438,7 +2439,7 @@
     }
   }
 
-  async function handleUpload(files) {
+  async function handleUpload(files, options = {}) {
     const selectedFiles = Array.isArray(files)
       ? files.filter((file) => file instanceof File)
       : files instanceof File
@@ -2449,7 +2450,20 @@
       return;
     }
 
-    const attempt = readDownloadFormValues();
+    const baseAttempt = readDownloadFormValues();
+    const uploadFolderOverride =
+      options && typeof options === 'object'
+        ? String(options.uploadFolder || '').trim()
+        : '';
+    const attempt = {
+      ...baseAttempt,
+      folder: uploadFolderOverride || baseAttempt.folder,
+      subdirectory: '',
+      root_key: uploadFolderOverride ? '' : baseAttempt.root_key,
+      selected_root_value: uploadFolderOverride
+        ? ''
+        : baseAttempt.selected_root_value,
+    };
     if (!attempt.root_key && !attempt.folder) {
       setStatus('Destination is required.', 'error');
       return;
@@ -2641,13 +2655,7 @@
     }
     if (uploadPathResolver) closeUploadPathModal(null);
 
-    const folderInput = document.getElementById('dtd-folder');
-    const selectedRoot = document.getElementById('dtd-root');
-    const selectedRootValue = String(selectedRoot?.value || '').trim();
-    const selectedRecent = selectedRootValue.startsWith('recent:')
-      ? selectedRootValue.slice('recent:'.length)
-      : '';
-    input.value = String(folderInput?.value || selectedRecent || 'output').trim();
+    input.value = String(state.uploadFolder || 'output').trim();
     modal.hidden = false;
     window.setTimeout(() => {
       input.focus();
@@ -3135,24 +3143,14 @@
         const chosenPath = await requestUploadPath();
         if (chosenPath == null) return;
         const normalizedPath = String(chosenPath || '').trim();
-        const folderInput = document.getElementById('dtd-folder');
-        if (folderInput instanceof HTMLInputElement) {
-          folderInput.value = normalizedPath;
-        }
-        const rootInput = document.getElementById('dtd-root');
-        if (rootInput instanceof HTMLSelectElement) {
-          const hasOutputRoot = Array.from(rootInput.options).some(
-            (opt) => opt.value === 'output',
-          );
-          if (hasOutputRoot) rootInput.value = 'output';
-        }
+        state.uploadFolder = normalizedPath || 'output';
         fileInput.click();
       });
       fileInput.addEventListener('change', () => {
         const files = Array.from(fileInput.files || []);
         fileInput.value = '';
         if (files.length === 0) return;
-        handleUpload(files).catch((err) =>
+        handleUpload(files, { uploadFolder: state.uploadFolder }).catch((err) =>
           setStatus(err.message || String(err), 'error'),
         );
       });
